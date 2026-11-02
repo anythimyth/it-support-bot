@@ -94,21 +94,23 @@ def send_whatsapp_reply(target: str, message: str):
     except Exception as e:
         print(f"[FONNTE ERROR] Gagal mengirim pesan WA ke {target}: {e}")
 
-def log_to_sheets_async(ticket_id, sender, sender_name, message, kategori, ai_reply):
+def log_to_sheets_async(ticket_id, sender, sender_name, message, image_url, kategori, ai_reply):
+    """Mencatat 11 kolom log tiket ke Google Sheets secara asinkron"""
     def run():
         try:
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             row_data = [
-                ticket_id, 
-                now_str, 
-                str(sender), 
-                str(sender_name), 
-                str(message), 
-                kategori, 
-                ai_reply, 
-                "Open / Automated", 
-                "-", 
-                "-"
+                ticket_id,                              # A: No. Tiket
+                now_str,                                # B: Waktu
+                str(sender),                            # C: No. HP Pengirim
+                str(sender_name),                       # D: Nama Client / Toko
+                str(message) if message else "-",       # E: Pesan Masuk
+                str(image_url) if image_url else "-",   # F: Lampiran Foto (URL)
+                kategori,                               # G: Kategori Kendala
+                ai_reply,                               # H: Solusi AI / Troubleshooting
+                "Open / Automated",                     # I: Status Tiket
+                "-",                                    # J: Teknisi PIC
+                "-"                                     # K: Catatan Penyelesaian
             ]
             sheet.append_row(row_data)
             print(f"[GOOGLE SHEETS] Sukses mencatat tiket #{ticket_id}")
@@ -188,8 +190,8 @@ def process_message_async(sender: str, sender_name: str, message: str, image_url
         print(f"[REPLY] Membalas pesan tiket ke client {sender}...")
         send_whatsapp_reply(str(sender), formatted_reply)
 
-    # Catat Log Tiket ke Google Sheets
-    log_to_sheets_async(ticket_id, sender, sender_name, message, kategori, ai_reply)
+    # Catat Log Tiket ke Google Sheets (11 Kolom)
+    log_to_sheets_async(ticket_id, sender, sender_name, message, image_url, kategori, ai_reply)
 
 # ----------------------------------------------------
 # 3. ENDPOINTS FASTAPI
