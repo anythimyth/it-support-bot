@@ -7,6 +7,10 @@ from fastapi import FastAPI, Request
 from google import genai
 from google.genai import types
 from oauth2client.service_account import ServiceAccountCredentials
+import asyncio
+import requests
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
 
 app = FastAPI()
 
@@ -88,3 +92,23 @@ async def handle_whatsapp(request: Request):
         send_whatsapp_reply(sender, ai_reply)
 
     return {"target": sender, "message": ai_reply}
+
+# Multi-tasking background loop untuk self-ping
+async def self_ping():
+    await asyncio.sleep(10)  # Waktu tunggu awal saat server booting
+    while True:
+        try:
+            # Ganti dengan URL Render Anda
+            requests.get("https://it-support-bot-49sb.onrender.com/")
+            print("Self-ping sent successfully to prevent sleeping.")
+        except Exception as e:
+            print(f"Self-ping failed: {e}")
+        await asyncio.sleep(600)  # Ping setiap 10 menit (600 detik)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Dijalankan saat aplikasi startup
+    asyncio.create_task(self_ping())
+    yield
+
+app = FastAPI(lifespan=lifespan)
