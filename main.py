@@ -2,12 +2,14 @@ import os
 import json
 import random
 import string
+import secrets
 import threading
 import gspread
 import requests
 from datetime import datetime
-from fastapi import FastAPI, Request, Form
+from fastapi import FastAPI, Request, Form, Depends, HTTPException, status
 from fastapi.responses import HTMLResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from google import genai
 from google.genai import types
 from oauth2client.service_account import ServiceAccountCredentials
@@ -20,6 +22,26 @@ app = FastAPI()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 FONNTE_TOKEN = os.getenv("FONNTE_TOKEN")
 GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON")
+
+# Kredensial Login Dashboard dari Environment Variable
+DASHBOARD_USER = os.getenv("DASHBOARD_USER", "admin")
+DASHBOARD_PASS = os.getenv("DASHBOARD_PASS", "admin123")
+
+# Security HTTP Basic Auth
+security = HTTPBasic()
+
+def authenticate(credentials: HTTPBasicCredentials = Depends(security)):
+    """Validasi username dan password dari Environment Variable secara aman"""
+    is_user_correct = secrets.compare_digest(credentials.username, DASHBOARD_USER)
+    is_pass_correct = secrets.compare_digest(credentials.password, DASHBOARD_PASS)
+    
+    if not (is_user_correct and is_pass_correct):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Username atau Password Dashboard Salah",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return credentials.username
 
 # Inisialisasi Gemini Client
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
@@ -195,7 +217,7 @@ def process_message_async(sender: str, sender_name: str, message: str, image_url
     log_to_sheets_async(ticket_id, sender, sender_name, message, image_url, kategori, ai_reply)
 
 # ----------------------------------------------------
-# 3. ENDPOINTS FASTAPI & WEB DASHBOARD
+# 3. ENDPOINTS FASTAPI & WEB DASHBOARD (DIPROTEKSI AUTH)
 # ----------------------------------------------------
 @app.api_route("/", methods=["GET", "HEAD"])
 def read_root():
@@ -206,7 +228,7 @@ def health_check():
     return {"status": "healthy"}
 
 @app.get("/dashboard", response_class=HTMLResponse)
-def view_dashboard():
+def view_dashboard(username: str = Depends(authenticate)):
     try:
         records = sheet.get_all_values()
         if not records or len(records) <= 1:
@@ -227,12 +249,12 @@ def view_dashboard():
             pesan = r[4] if len(r) > 4 else "-"
             image_url = r[5] if len(r) > 5 else "-"
             kategori = r[6] if len(r) > 6 else "-"
-            status = r[8] if len(r) > 8 else "Open / Automated"
+            status_val = r[8] if len(r) > 8 else "Open / Automated"
             pic = r[9] if len(r) > 9 else "-"
             catatan = r[10] if len(r) > 10 else "-"
             
             img_html = f'<a href="{image_url}" target="_blank" class="text-blue-500 underline font-semibold">Lihat Foto</a>' if image_url.startswith("http") else "-"
-            status_color = "bg-yellow-100 text-yellow-800" if "Open" in status else ("bg-blue-100 text-blue-800" if "Progress" in status else "bg-green-100 text-green-800")
+            status_color = "bg-yellow-100 text-yellow-800" if "Open" in status_val else ("bg-blue-100 text-blue-800" if "Progress" in status_val else "bg-green-100 text-green-800")
             
             table_rows_html += f"""
             <tr class="border-b hover:bg-gray-50">
@@ -242,16 +264,16 @@ def view_dashboard():
                 <td class="p-3 max-w-xs truncate">{pesan}</td>
                 <td class="p-3">{img_html}</td>
                 <td class="p-3"><span class="px-2 py-1 text-xs font-semibold rounded bg-gray-200">{kategori}</span></td>
-                <td class="p-3"><span class="px-2 py-1 text-xs font-semibold rounded {status_color}">{status}</span></td>
+                <td class="p-3"><span class="px-2 py-1 text-xs font-semibold rounded {status_color}">{status_val}</span></td>
                 <td class="p-3">{pic}</td>
                 <td class="p-3 text-xs">{catatan}</td>
                 <td class="p-3">
                     <form action="/update-ticket" method="post" class="flex flex-col gap-1">
                         <input type="hidden" name="row_idx" value="{row_idx}">
                         <select name="status" class="text-xs p-1 border rounded bg-white">
-                            <option value="Open / Automated" {"selected" if "Open" in status else ""}>Open</option>
-                            <option value="In Progress" {"selected" if "Progress" in status else ""}>In Progress</option>
-                            <option value="Closed" {"selected" if "Closed" in status else ""}>Closed</option>
+                            <option value="Open / Automated" {"selected" if "Open" in status_val else ""}>Open</option>
+                            <option value="In Progress" {"selected" if "Progress" in status_val else ""}>In Progress</option>
+                            <option value="Closed" {"selected" if "Closed" in status_val else ""}>Closed</option>
                         </select>
                         <input type="text" name="pic" placeholder="Teknisi PIC" value="{pic if pic != '-' else ''}" class="text-xs p-1 border rounded">
                         <input type="text" name="catatan" placeholder="Catatan Penyelesaian" value="{catatan if catatan != '-' else ''}" class="text-xs p-1 border rounded">
@@ -272,7 +294,10 @@ def view_dashboard():
         </head>
         <body class="bg-gray-100 p-6">
             <div class="max-w-7xl mx-auto">
-                <h1 class="text-2xl font-bold mb-4 text-gray-800">🛠️ Dashboard Status Tiket IT Support</h1>
+                <div class="flex justify-between items-center mb-4">
+                    <h1 class="text-2xl font-bold text-gray-800">🛠️ Dashboard Status Tiket IT Support</h1>
+                    <span class="text-xs bg-gray-200 text-gray-700 px-3 py-1 rounded-full font-mono">Logged in as: <b>{username}</b></span>
+                </div>
                 
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
                     <div class="bg-white p-4 rounded shadow">
@@ -319,7 +344,13 @@ def view_dashboard():
         return f"<h2>Error loading dashboard: {e}</h2>"
 
 @app.post("/update-ticket")
-def update_ticket(row_idx: int = Form(...), status: str = Form(...), pic: str = Form(...), catatan: str = Form(...)):
+def update_ticket(
+    row_idx: int = Form(...), 
+    status: str = Form(...), 
+    pic: str = Form(...), 
+    catatan: str = Form(...),
+    username: str = Depends(authenticate)
+):
     try:
         sheet.update_cell(row_idx, 9, status)
         sheet.update_cell(row_idx, 10, pic.strip() if pic.strip() else "-")
