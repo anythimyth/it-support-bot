@@ -5,7 +5,7 @@ import string
 import gspread
 import requests
 from datetime import datetime
-from fastapi import FastAPI, Request, BackgroundTasks
+from fastapi import FastAPI, Request
 from google import genai
 from google.genai import types
 from oauth2client.service_account import ServiceAccountCredentials
@@ -67,10 +67,29 @@ def send_whatsapp_reply(target: str, message: str):
         print(f"Error sending WA via Fonnte: {e}")
 
 # ----------------------------------------------------
-# 2. PROSES UTAMA DI BACKGROUND TASK
+# 2. ENDPOINT WEBHOOK SYNCHRONOUS (PASTI TERBALAS)
 # ----------------------------------------------------
-def process_bot_flow(sender: str, message: str, sender_name: str):
+@app.get("/")
+def read_root():
+    return {"status": "IT Support Bot Webhook Service is Running"}
+
+@app.post("/webhook")
+async def handle_whatsapp(request: Request):
+    try:
+        data = await request.json()
+    except Exception:
+        return {"status": "invalid json"}
+    
+    sender = data.get("sender") or data.get("from") or data.get("phone")
+    message = data.get("message") or data.get("text")
+    sender_name = data.get("name") or data.get("pushname") or "Client WA"
+    
+    if not message or not sender:
+        return {"status": "ignored"}
+    
     ticket_id = generate_ticket_number()
+    
+    # Process AI Reply (Auto-Fallback Mechanism)
     models_to_try = ['gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-2.5-flash', 'gemini-1.5-flash']
     response = None
     kategori = "Lainnya"
@@ -114,7 +133,7 @@ def process_bot_flow(sender: str, message: str, sender_name: str):
 
     formatted_reply = f"🎫 *[TIKET #{ticket_id}]*\n\n{ai_reply}"
 
-    # Log ke Sheets
+    # Log ke Google Sheets
     try:
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         row_data = [ticket_id, now_str, str(sender), str(sender_name), str(message), kategori, ai_reply, "Open / Automated", "-", "-"]
@@ -122,33 +141,8 @@ def process_bot_flow(sender: str, message: str, sender_name: str):
     except Exception as e:
         print(f"Error logging to Sheets: {e}")
 
-    # Kirim Balasan WA
+    # Kirim Balasan ke WhatsApp Pengirim
     if FONNTE_TOKEN:
         send_whatsapp_reply(str(sender), formatted_reply)
 
-# ----------------------------------------------------
-# 3. ENDPOINT WEBHOOK FASTAPI
-# ----------------------------------------------------
-@app.get("/")
-def read_root():
-    return {"status": "IT Support Bot Webhook Service is Running"}
-
-@app.post("/webhook")
-async def handle_whatsapp(request: Request, background_tasks: BackgroundTasks):
-    try:
-        data = await request.json()
-    except Exception:
-        return {"status": "invalid json"}
-    
-    sender = data.get("sender") or data.get("from") or data.get("phone")
-    message = data.get("message") or data.get("text")
-    sender_name = data.get("name") or data.get("pushname") or "Client WA"
-    
-    if not message or not sender:
-        return {"status": "ignored"}
-    
-    # Masukkan proses AI & Sheets ke Background Task agar FastAPI merespon detik itu juga
-    background_tasks.add_task(process_bot_flow, str(sender), str(message), str(sender_name))
-    
-    # Kirim respon 200 OK instan ke Fonnte
-    return {"status": "processing_in_background"}
+    return {"ticket_id": ticket_id, "target": sender, "message": formatted_reply}
