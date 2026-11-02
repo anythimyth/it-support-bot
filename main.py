@@ -150,3 +150,14 @@ async def handle_whatsapp(request: Request):
 @app.get("/health")
 def health_check():
     return {"status": "ok", "timestamp": datetime.now().isoformat()}
+
+# ----------------------------------------------------
+# ENDPOINTS MONITORING & HEALTH CHECK (FIX 405 ERROR)
+# ----------------------------------------------------
+@app.api_route("/", methods=["GET", "HEAD"])
+def read_root():
+    return {"status": "IT Support Bot Webhook Service is Running"}
+
+@app.api_route("/health", methods=["GET", "HEAD"])
+def health_check():
+    return {"status": "healthy"}
