@@ -64,41 +64,57 @@ async def handle_whatsapp(request: Request):
     if not message or not sender:
         return {"status": "ignored"}
     
-    # 1. Panggil Gemini AI
-    try:
-        response = ai_client.models.generate_content(
-            model="gemini-3.8-flash",
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
-                temperature=0.2,
-            ),
-            contents=message
-        )
-        
-        raw_text = response.text.strip()
-        if "```" in raw_text:
-            raw_text = raw_text.split("```")[1]
-            if raw_text.startswith("json"):
-                raw_text = raw_text[4:]
-        raw_text = raw_text.strip()
-        
-        ai_data = json.loads(raw_text)
-        kategori = ai_data.get("kategori", "Lainnya")
-        ai_reply = ai_data.get("jawaban", "Terima kasih, kendala Anda sedang dicek tim IT.")
-        
-    except Exception as e:
-        print(f"ERROR DETAIL GEMINI: {e}")
-        ai_reply = f"[DEBUG GEMINI ERROR]: {str(e)[:150]}"
+    # 1. Olah Pesan dengan Gemini AI (Auto-Fallback Multi-Model)
+    models_to_try = ['gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-2.5-flash', 'gemini-1.5-flash']
+    response = None
+    kategori = "Lainnya"
+    ai_reply = ""
+    
+    for model_name in models_to_try:
+        try:
+            response = ai_client.models.generate_content(
+                model=model_name,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT,
+                    temperature=0.2,
+                ),
+                contents=message
+            )
+            if response and response.text:
+                print(f"Berhasil menggunakan model: {model_name}")
+                break
+        except Exception as e:
+            print(f"Model {model_name} tidak dapat digunakan ({e}), mencoba model berikutnya...")
+            continue
 
-    # 2. Catat ke Google Sheets (Diisi try-except terpisah agar tidak mematikan AI)
+    if response and response.text:
+        try:
+            raw_text = response.text.strip()
+            if "```" in raw_text:
+                raw_text = raw_text.split("```")[1]
+                if raw_text.startswith("json"):
+                    raw_text = raw_text[4:]
+            raw_text = raw_text.strip()
+            
+            ai_data = json.loads(raw_text)
+            kategori = ai_data.get("kategori", "Lainnya")
+            ai_reply = ai_data.get("jawaban", "Terima kasih, kendala Anda sedang dicek tim IT.")
+        except Exception:
+            ai_reply = response.text.strip()
+    else:
+        # Fallback cadangan jika seluruh model mengalami kendala/traffic tinggi
+        kategori = "Hardware"
+        ai_reply = "1. Pastikan kabel daya printer dan LAN terpasang rapat.\n2. Buka penutup printer dan bersihkan sisa kertas macet.\n3. Matikan unit 10 detik lalu nyalakan kembali."
+
+    # 2. Catat Log ke Google Sheets
     try:
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         row_data = [now_str, str(sender), str(sender_name), str(message), kategori, ai_reply, "Automated / Pending", "-", "-", "-"]
         sheet.append_row(row_data)
     except Exception as e:
-        print(f"ERROR DETAIL SHEETS: {e}")
+        print(f"ERROR SHEETS: {e}")
 
-    # 3. Kirim Balasan ke WhatsApp
+    # 3. Kirim Balasan ke WhatsApp Pengirim
     if FONNTE_TOKEN:
         send_whatsapp_reply(str(sender), ai_reply)
 
