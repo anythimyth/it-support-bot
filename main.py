@@ -146,3 +146,7 @@ async def handle_whatsapp(request: Request):
         send_whatsapp_reply(str(sender), formatted_reply)
 
     return {"ticket_id": ticket_id, "target": sender, "message": formatted_reply}
+    
+@app.get("/health")
+def health_check():
+    return {"status": "ok", "timestamp": datetime.now().isoformat()}
