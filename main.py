@@ -130,7 +130,7 @@ async def handle_whatsapp(request: Request):
     print(f"Pesan: {message}")
 
     # 1. Olah Pesan dengan Gemini AI (Auto-Fallback Mechanism)
-    models_to_try = ['gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-2.5-flash', 'gemini-1.5-flash']
+    models_to_try = ['gemini-3.5-flash-lite', 'gemini-3.6-flash', 'gemini-3.8-flash', 'gemini-2.5-flash']
     response = None
     kategori = "Pribadi/Abaikan"
     ai_reply = ""
