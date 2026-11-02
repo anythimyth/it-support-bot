@@ -6,7 +6,8 @@ import threading
 import gspread
 import requests
 from datetime import datetime
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Form
+from fastapi.responses import HTMLResponse
 from google import genai
 from google.genai import types
 from oauth2client.service_account import ServiceAccountCredentials
@@ -194,7 +195,7 @@ def process_message_async(sender: str, sender_name: str, message: str, image_url
     log_to_sheets_async(ticket_id, sender, sender_name, message, image_url, kategori, ai_reply)
 
 # ----------------------------------------------------
-# 3. ENDPOINTS FASTAPI
+# 3. ENDPOINTS FASTAPI & WEB DASHBOARD
 # ----------------------------------------------------
 @app.api_route("/", methods=["GET", "HEAD"])
 def read_root():
@@ -203,6 +204,129 @@ def read_root():
 @app.api_route("/health", methods=["GET", "HEAD"])
 def health_check():
     return {"status": "healthy"}
+
+@app.get("/dashboard", response_class=HTMLResponse)
+def view_dashboard():
+    try:
+        records = sheet.get_all_values()
+        if not records or len(records) <= 1:
+            return "<h2>Google Sheets Kosong atau Belum Ada Tiket</h2>"
+        
+        rows = records[1:]
+        
+        total_tickets = len(rows)
+        open_tickets = sum(1 for r in rows if len(r) > 8 and "Open" in r[8])
+        closed_tickets = sum(1 for r in rows if len(r) > 8 and "Closed" in r[8])
+        
+        table_rows_html = ""
+        for idx, r in enumerate(reversed(rows), start=1):
+            row_idx = len(rows) - idx + 2
+            ticket_id = r[0] if len(r) > 0 else "-"
+            waktu = r[1] if len(r) > 1 else "-"
+            sender_name = r[3] if len(r) > 3 else "-"
+            pesan = r[4] if len(r) > 4 else "-"
+            image_url = r[5] if len(r) > 5 else "-"
+            kategori = r[6] if len(r) > 6 else "-"
+            status = r[8] if len(r) > 8 else "Open / Automated"
+            pic = r[9] if len(r) > 9 else "-"
+            catatan = r[10] if len(r) > 10 else "-"
+            
+            img_html = f'<a href="{image_url}" target="_blank" class="text-blue-500 underline font-semibold">Lihat Foto</a>' if image_url.startswith("http") else "-"
+            status_color = "bg-yellow-100 text-yellow-800" if "Open" in status else ("bg-blue-100 text-blue-800" if "Progress" in status else "bg-green-100 text-green-800")
+            
+            table_rows_html += f"""
+            <tr class="border-b hover:bg-gray-50">
+                <td class="p-3 font-semibold text-gray-700">{ticket_id}</td>
+                <td class="p-3 text-xs text-gray-500">{waktu}</td>
+                <td class="p-3">{sender_name}</td>
+                <td class="p-3 max-w-xs truncate">{pesan}</td>
+                <td class="p-3">{img_html}</td>
+                <td class="p-3"><span class="px-2 py-1 text-xs font-semibold rounded bg-gray-200">{kategori}</span></td>
+                <td class="p-3"><span class="px-2 py-1 text-xs font-semibold rounded {status_color}">{status}</span></td>
+                <td class="p-3">{pic}</td>
+                <td class="p-3 text-xs">{catatan}</td>
+                <td class="p-3">
+                    <form action="/update-ticket" method="post" class="flex flex-col gap-1">
+                        <input type="hidden" name="row_idx" value="{row_idx}">
+                        <select name="status" class="text-xs p-1 border rounded bg-white">
+                            <option value="Open / Automated" {"selected" if "Open" in status else ""}>Open</option>
+                            <option value="In Progress" {"selected" if "Progress" in status else ""}>In Progress</option>
+                            <option value="Closed" {"selected" if "Closed" in status else ""}>Closed</option>
+                        </select>
+                        <input type="text" name="pic" placeholder="Teknisi PIC" value="{pic if pic != '-' else ''}" class="text-xs p-1 border rounded">
+                        <input type="text" name="catatan" placeholder="Catatan Penyelesaian" value="{catatan if catatan != '-' else ''}" class="text-xs p-1 border rounded">
+                        <button type="submit" class="bg-blue-600 text-white text-xs px-2 py-1 rounded hover:bg-blue-700 transition">Update</button>
+                    </form>
+                </td>
+            </tr>
+            """
+
+        html_content = f"""
+        <!DOCTYPE html>
+        <html lang="id">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Dashboard IT Support Tiket</title>
+            <script src="https://cdn.tailwindcss.com"></script>
+        </head>
+        <body class="bg-gray-100 p-6">
+            <div class="max-w-7xl mx-auto">
+                <h1 class="text-2xl font-bold mb-4 text-gray-800">🛠️ Dashboard Status Tiket IT Support</h1>
+                
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                    <div class="bg-white p-4 rounded shadow">
+                        <p class="text-gray-500 text-sm">Total Tiket</p>
+                        <p class="text-2xl font-bold text-gray-800">{total_tickets}</p>
+                    </div>
+                    <div class="bg-white p-4 rounded shadow border-l-4 border-yellow-400">
+                        <p class="text-gray-500 text-sm">Tiket Open</p>
+                        <p class="text-2xl font-bold text-yellow-600">{open_tickets}</p>
+                    </div>
+                    <div class="bg-white p-4 rounded shadow border-l-4 border-green-500">
+                        <p class="text-gray-500 text-sm">Tiket Closed</p>
+                        <p class="text-2xl font-bold text-green-600">{closed_tickets}</p>
+                    </div>
+                </div>
+
+                <div class="bg-white rounded shadow overflow-x-auto">
+                    <table class="w-full text-left text-sm">
+                        <thead class="bg-gray-800 text-white text-xs uppercase">
+                            <tr>
+                                <th class="p-3">No. Tiket</th>
+                                <th class="p-3">Waktu</th>
+                                <th class="p-3">Client</th>
+                                <th class="p-3">Pesan</th>
+                                <th class="p-3">Foto</th>
+                                <th class="p-3">Kategori</th>
+                                <th class="p-3">Status</th>
+                                <th class="p-3">Teknisi</th>
+                                <th class="p-3">Catatan</th>
+                                <th class="p-3">Aksi Update</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {table_rows_html}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        return html_content
+    except Exception as e:
+        return f"<h2>Error loading dashboard: {e}</h2>"
+
+@app.post("/update-ticket")
+def update_ticket(row_idx: int = Form(...), status: str = Form(...), pic: str = Form(...), catatan: str = Form(...)):
+    try:
+        sheet.update_cell(row_idx, 9, status)
+        sheet.update_cell(row_idx, 10, pic.strip() if pic.strip() else "-")
+        sheet.update_cell(row_idx, 11, catatan.strip() if catatan.strip() else "-")
+        return HTMLResponse(content="<script>window.location.href='/dashboard';</script>")
+    except Exception as e:
+        return f"<h2>Gagal memperbarui tiket: {e}</h2>"
 
 @app.post("/webhook")
 async def handle_whatsapp(request: Request):
@@ -223,7 +347,6 @@ async def handle_whatsapp(request: Request):
     print(f"Dari: {sender_name} ({sender})")
     print(f"Pesan: {message} | Image URL: {image_url}")
 
-    # Jalankan Seluruh Proses AI & Balasan di Background Thread
     threading.Thread(
         target=process_message_async, 
         args=(str(sender), str(sender_name), str(message), image_url)
