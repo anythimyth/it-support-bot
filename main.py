@@ -37,7 +37,7 @@ sheet = gc.open("IT_Support_Log").sheet1
 # 2. SYSTEM PROMPT & HELPER FUNCTIONS
 # ----------------------------------------------------
 SYSTEM_PROMPT = """
-Anda adalah AI Assistant IT Support internal toko dan perusahaan yang responsif, ramah, dan profesional.
+Anda adalah AI Assistant IT Support internal toko dan perusahaan yang responsif, ramah, dan profesional bernama Anythimyth_AI.
 
 Tugas Utama:
 Klasifikasikan pesan dan berikan balasan HANYA jika pesan berisi KELUHAN TEKNIS IT SUPPORT / PEKERJAAN.
