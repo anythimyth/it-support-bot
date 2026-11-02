@@ -24,21 +24,19 @@ sheet = sheet_client.open("IT_Support_Log").sheet1
 SYSTEM_PROMPT = """
 Anda adalah AI Assistant IT Support internal toko dan perusahaan yang responsif, ramah, dan profesional.
 
-Tugas dan Aturan Respon Anda:
-1. Jika pengguna mengirimkan SAPAAN atau CHAT BIASA (contoh: "Halo", "Selamat Pagi", "P", "Tes", "Halo mas", "Siang"):
-   - Balas dengan sapaan yang hangat dan ramah.
-   - Tanyakan kendala IT Support apa yang sedang dialami (seperti masalah POS/Kasir, Printer Thermal, Barcode Scanner, Network/WiFi, atau Hardware lainnya).
-   - Isi field "kategori" dengan "Informasi/Sapaan".
+Aturan Respon:
+1. Jika pengguna mengirim SAPAAN / CHAT BIASA (contoh: "Halo", "Pagi", "P", "Tes", "Siang"):
+   - Balas sapaan dengan ramah dan tanyakan kendala IT apa yang sedang dialami.
+   - Set "kategori": "Informasi/Sapaan".
 
-2. Jika pengguna mengirimkan KELUHAN TEKNIS / TROUBLE (contoh: "Printer macet", "WiFi kasir putus", "Aplikasi POS error"):
-   - Berikan 2-3 langkah troubleshooting yang ringkas, jelas, dan mudah diikuti.
-   - Klasifikasikan kendala ke salah satu kategori resmi: "Hardware", "Network", "POS", "Software", atau "Lainnya".
+2. Jika pengguna mengirim KELUHAN TEKNIS (contoh: "Printer macet", "Kasir error", "WiFi putus"):
+   - Berikan 2-3 langkah troubleshooting ringkas.
+   - Set "kategori": "Hardware/Network/POS/Software/Lainnya".
 
-Format Respon Wajib:
-Selalu jawab HANYA dalam format JSON valid berikut tanpa teks tambahan:
+Format Respon Wajib (HANYA JSON VALID):
 {
-  "kategori": "Hardware/Network/POS/Software/Informasi/Sapaan/Lainnya",
-  "jawaban": "Isi pesan balasan ramah atau langkah troubleshooting di sini"
+  "kategori": "Informasi/Sapaan/Hardware/Network/POS/Software/Lainnya",
+  "jawaban": "Isi pesan balasan Anda di sini"
 }
 """
 
@@ -75,6 +73,8 @@ async def handle_whatsapp(request: Request):
     if not message or not sender:
         return {"status": "ignored"}
     
+    ticket_id = generate_ticket_number()
+    
     # 1. Olah Pesan dengan Gemini AI (Auto-Fallback Multi-Model)
     models_to_try = ['gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-2.5-flash', 'gemini-1.5-flash']
     response = None
@@ -92,15 +92,14 @@ async def handle_whatsapp(request: Request):
                 contents=message
             )
             if response and response.text:
-                print(f"Berhasil menggunakan model: {model_name}")
                 break
-        except Exception as e:
-            print(f"Model {model_name} tidak dapat digunakan ({e}), mencoba model berikutnya...")
+        except Exception:
             continue
 
     if response and response.text:
         try:
             raw_text = response.text.strip()
+            # Bersihkan blok code markdown ```json ... ```
             if "```" in raw_text:
                 raw_text = raw_text.split("```")[1]
                 if raw_text.startswith("json"):
@@ -109,24 +108,29 @@ async def handle_whatsapp(request: Request):
             
             ai_data = json.loads(raw_text)
             kategori = ai_data.get("kategori", "Lainnya")
-            ai_reply = ai_data.get("jawaban", "Terima kasih, kendala Anda sedang dicek tim IT.")
+            ai_reply = ai_data.get("jawaban", "Halo! Ada kendala IT Support yang bisa kami bantu hari ini?")
         except Exception:
-            ai_reply = response.text.strip()
+            # Jika gagal parse JSON, gunakan teks asli AI atau sapaan umum
+            ai_reply = "Halo! Terima kasih telah menghubungi IT Support. Ada kendala teknis yang bisa kami bantu?"
     else:
-        # Fallback cadangan jika seluruh model mengalami kendala/traffic tinggi
-        kategori = "Hardware"
-        ai_reply = "1. Pastikan kabel daya printer dan LAN terpasang rapat.\n2. Buka penutup printer dan bersihkan sisa kertas macet.\n3. Matikan unit 10 detik lalu nyalakan kembali."
+        # Fallback cadangan Netral (Bukan troubleshooting printer lagi)
+        kategori = "Informasi/Sapaan"
+        ai_reply = "Halo! Terima kasih telah menghubungi IT Support. Silakan sampaikan kendala teknis Anda (seperti POS, Printer, WiFi, atau Scanner)."
+
+    # Format Balasan WhatsApp
+    formatted_reply = f"🎫 *[TIKET #{ticket_id}]*\n\n{ai_reply}"
 
     # 2. Catat Log ke Google Sheets
     try:
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        row_data = [now_str, str(sender), str(sender_name), str(message), kategori, ai_reply, "Automated / Pending", "-", "-", "-"]
+        row_data = [ticket_id, now_str, str(sender), str(sender_name), str(message), kategori, ai_reply, "Open / Automated", "-", "-"]
         sheet.append_row(row_data)
     except Exception as e:
         print(f"ERROR SHEETS: {e}")
 
-    # 3. Kirim Balasan ke WhatsApp Pengirim
+    # 3. Kirim Balasan ke WhatsApp
     if FONNTE_TOKEN:
-        send_whatsapp_reply(str(sender), ai_reply)
+        send_whatsapp_reply(str(sender), formatted_reply)
 
+    return {"ticket_id": ticket_id, "target": sender, "message": formatted_reply}
     return {"target": sender, "message": ai_reply}
