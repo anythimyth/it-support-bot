@@ -20,8 +20,8 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 FONNTE_TOKEN = os.getenv("FONNTE_TOKEN")
 GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON")
 
-# Group ID Notifikasi IT Support (Format: 120363xxxxxxxx@g.us)
-GROUP_IT_SUPPORT = os.getenv("GROUP_IT_SUPPORT")
+# Nomor WA/HP Penerima Alert Khusus (Format: 08xxxxxxxxxx atau 628xxxxxxxxxx)
+ALERT_PHONE_NUMBER = os.getenv("ALERT_PHONE_NUMBER")
 
 # Inisialisasi Gemini Client
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
@@ -46,7 +46,7 @@ Tugas Utama:
 Klasifikasikan pesan dan berikan balasan HANYA jika pesan berisi KELUHAN TEKNIS IT SUPPORT / PEKERJAAN.
 
 Aturan Klasifikasi:
-1. Jika pengguna mengirim SAPAAN / CHAT PRIBADI / OBROLAN BIASA (contoh: "Halo", "P", "Tes", "Lagi apa", "Siang", "cek"):
+1. Jika pengguna mengirim SAPAAN / CHAT PRIBADI / OBROLAN BIASA (contoh: "Halo", "P", "Tes", "Lagi apa", "Siang"):
    - Set "kategori": "Pribadi/Abaikan"
    - Set "jawaban": ""
 
@@ -80,20 +80,16 @@ def send_whatsapp_reply(target: str, message: str):
     except Exception as e:
         print(f"[FONNTE ERROR] Gagal mengirim pesan WA ke {target}: {e}")
 
-def send_group_notification(target_group: str, title: str, ticket_id: str, sender: str, sender_name: str, message: str, kategori: str):
-    if not target_group:
-        print("[WARNING] GROUP_IT_SUPPORT belum di-set di Environment Variables Render!")
+def send_simple_wa_alert(sender: str, sender_name: str):
+    """Mengirim Notifikasi Ringkas untuk SEMUA Pesan Masuk (Pribadi & Pekerjaan)"""
+    if not ALERT_PHONE_NUMBER:
+        print("[WARNING] ALERT_PHONE_NUMBER belum di-set di Environment Variables Render!")
         return
     
-    group_text = (
-        f"{title}\n\n"
-        f"🎫 *No. Tiket:* #{ticket_id}\n"
-        f"👤 *Pengirim:* {sender_name} ({sender})\n"
-        f"📂 *Kategori:* {kategori}\n"
-        f"💬 *Pesan:* \"{message}\""
-    )
-    print(f"[NOTIF GRUP] Mengirim notifikasi tiket #{ticket_id} ke Grup {target_group}")
-    send_whatsapp_reply(target_group, group_text)
+    # Format universal yang singkat & pasti ditangkap MacroDroid
+    alert_message = f"SMS_ALERT: Ada WA Masuk dari {sender_name} ({sender})"
+    print(f"[ALERT HP LAMA] Mengirim sinyal alert ke {ALERT_PHONE_NUMBER}")
+    send_whatsapp_reply(ALERT_PHONE_NUMBER, alert_message)
 
 def log_to_sheets_async(ticket_id, sender, sender_name, message, kategori, ai_reply):
     def run():
@@ -143,16 +139,22 @@ async def handle_whatsapp(request: Request):
     if not message or not sender:
         return {"status": "ignored"}
     
-    # 0. ABAIKAN JIKA PESAN BERASAL DARI GRUP IT SUPPORT SENDIRI
-    if GROUP_IT_SUPPORT and str(sender) == str(GROUP_IT_SUPPORT):
-        print(f"[WEBHOOK] Pesan dari grup notifikasi {sender} diabaikan untuk mencegah looping.")
-        return {"status": "ignored_group_msg"}
+    # Abaikan jika pesan berasal dari nomor alert sendiri agar tidak looping
+    if ALERT_PHONE_NUMBER and str(sender) == str(ALERT_PHONE_NUMBER):
+        return {"status": "ignored_self_alert"}
     
     print(f"\n--- PESAN MASUK ---")
     print(f"Dari: {sender_name} ({sender})")
     print(f"Pesan: {message}")
 
-    # 1. Olah Pesan dengan Gemini AI (Auto-Fallback Mechanism)
+    # 1. KIRIM NOTIFIKASI SMS_ALERT UNTUK *SEMUA* PESAN MASUK (PRIORITAS UTAMA)
+    if ALERT_PHONE_NUMBER:
+        threading.Thread(
+            target=send_simple_wa_alert, 
+            args=(str(sender), str(sender_name))
+        ).start()
+
+    # 2. Olah Pesan dengan Gemini AI untuk Klasifikasi
     models_to_try = ['gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-2.5-flash', 'gemini-1.5-flash']
     response = None
     kategori = "Pribadi/Abaikan"
@@ -189,32 +191,21 @@ async def handle_whatsapp(request: Request):
             ai_reply = ai_data.get("jawaban", "")
         except Exception as e:
             print(f"[PARSE ERROR] Gagal parse JSON Gemini: {e}")
-            return {"status": "ignored_unparsed"}
+            return {"status": "alert_sent_unparsed"}
 
-    # 2. FILTER CHAT PRIBADI: JIKA BUKAN KELUHAN TEKNIS -> ABAIKAN TANPA BALASAN
+    # 3. JIKA CHAT PRIBADI / SAPAAN -> STOP DI SINI (AI TIDAK MEMBALAS & TIDAK MENCATAT LOG)
     if kategori == "Pribadi/Abaikan" or not ai_reply.strip():
-        print(f"[FILTER] Pesan dari {sender} dikategorikan sebagai Chat Pribadi. Diabaikan oleh bot.")
-        return {"status": "ignored_personal_chat"}
+        print(f"[FILTER] Pesan pribadi dari {sender}. Alert terkirim, balasan AI diabaikan.")
+        return {"status": "alert_sent_personal_ignored"}
 
-    # 3. KELUHAN TEKNIS DIKONFIRMASI -> GENERATE TIKET & KIRIM BALASAN
+    # 4. JIKA KELUHAN TEKNIS -> BALAS DENGAN TIKET & CATAT LOG
     ticket_id = generate_ticket_number()
     formatted_reply = f"🎫 *[TIKET #{ticket_id}]*\n\n{ai_reply}"
 
-    # Kirim Balasan ke WhatsApp Client/Toko
     if FONNTE_TOKEN:
-        print(f"[REPLY] Membalas pesan ke client {sender}...")
+        print(f"[REPLY] Membalas tiket ke client {sender}...")
         send_whatsapp_reply(str(sender), formatted_reply)
 
-        # Kirim Alert Notifikasi ke Grup IT Support di Background Thread
-        if GROUP_IT_SUPPORT:
-            threading.Thread(
-                target=send_group_notification, 
-                args=(GROUP_IT_SUPPORT, "🚨 *[TIKET MASUK IT SUPPORT]*", ticket_id, str(sender), str(sender_name), str(message), kategori)
-            ).start()
-        else:
-            print("[WARNING] Variabel GROUP_IT_SUPPORT di Render masih kosong!")
-
-    # Catat Log Tiket ke Google Sheets di Background Thread
     log_to_sheets_async(ticket_id, sender, sender_name, message, kategori, ai_reply)
 
     return {"ticket_id": ticket_id, "target": sender, "message": formatted_reply}
