@@ -161,14 +161,14 @@ async def handle_whatsapp(request: Request):
             
             ai_data = json.loads(raw_text)
             kategori = ai_data.get("kategori", "Lainnya")
-            ai_reply = ai_data.get("jawaban", "Halo! Terima kasih telah menghubungi IT Support. Ada yang bisa kami bantu?")
+            ai_reply = ai_data.get("jawaban", "Halo! saya merupakan Anythimyth_AI, Terima kasih telah menghubungi Kami. Ada yang bisa kami bantu?")
         except Exception:
             ai_reply = response.text.strip()
             kategori = "Informasi/Sapaan"
     else:
         # Fallback Cadangan Netral jika seluruh API Google sibuk/offline
         kategori = "Informasi/Sapaan"
-        ai_reply = "Halo! Terima kasih telah menghubungi IT Support. Silakan sampaikan kendala teknis Anda (seperti POS, Printer, WiFi, atau Scanner)."
+        ai_reply = "Halo! saya merupakan Anythimyth_AI, Terima kasih telah menghubungi Kami. Silakan sampaikan kendala teknis Anda (seperti POS, Printer, WiFi, atau Scanner)."
 
     formatted_reply = f"🎫 *[TIKET #{ticket_id}]*\n\n{ai_reply}"
 
