@@ -67,7 +67,7 @@ async def handle_whatsapp(request: Request):
     # 1. Panggil Gemini AI
     try:
         response = ai_client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-1.5-flash",
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_PROMPT,
                 temperature=0.2,
