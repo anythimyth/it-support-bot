@@ -14,11 +14,15 @@ from oauth2client.service_account import ServiceAccountCredentials
 app = FastAPI()
 
 # ----------------------------------------------------
-# 1. KONFIGURASI GEMINI AI & GOOGLE SHEETS
+# 1. KONFIGURASI BOT & SECRETS (BACA DARI ENVIRONMENT)
 # ----------------------------------------------------
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 FONNTE_TOKEN = os.getenv("FONNTE_TOKEN")
 GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON")
+
+# Group ID diambil dari Environment Variables agar aman dari public GitHub
+GROUP_IT_SUPPORT = os.getenv("GROUP_IT_SUPPORT")  # Format: 120363xxxxxxxx@g.us
+GROUP_PRIBADI = os.getenv("GROUP_PRIBADI")        # Format: 120363xxxxxxxx@g.us
 
 # Inisialisasi Gemini Client
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
@@ -57,13 +61,11 @@ Format Respon Wajib (HANYA JSON VALID):
 """
 
 def generate_ticket_number():
-    """Membuat Nomor Tiket Unik berbasis Tanggal + Random Alfanumerik"""
     date_str = datetime.now().strftime("%Y%m%d")
     random_str = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
     return f"TCK-{date_str}-{random_str}"
 
 def send_whatsapp_reply(target: str, message: str):
-    """Mengirim Balasan Pesan via Fonnte WA Gateway API"""
     url = "https://api.fonnte.com/send"
     headers = {"Authorization": FONNTE_TOKEN}
     payload = {
@@ -75,8 +77,19 @@ def send_whatsapp_reply(target: str, message: str):
     except Exception as e:
         print(f"Error sending WA via Fonnte: {e}")
 
+def send_group_notification(target_group: str, title: str, ticket_id: str, sender: str, sender_name: str, message: str, kategori: str):
+    if not target_group:
+        return
+    group_text = (
+        f"{title}\n\n"
+        f"🎫 *No. Tiket:* #{ticket_id}\n"
+        f"👤 *Pengirim:* {sender_name} ({sender})\n"
+        f"📂 *Kategori:* {kategori}\n"
+        f"💬 *Pesan:* \"{message}\""
+    )
+    send_whatsapp_reply(target_group, group_text)
+
 def log_to_sheets_async(ticket_id, sender, sender_name, message, kategori, ai_reply):
-    """Mencatat Log ke Google Sheets secara Asinkron di Background Thread (Non-blocking)"""
     def run():
         try:
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -93,7 +106,6 @@ def log_to_sheets_async(ticket_id, sender, sender_name, message, kategori, ai_re
                 "-"
             ]
             sheet.append_row(row_data)
-            print(f"Sukses mencatat tiket {ticket_id} ke Google Sheets.")
         except Exception as e:
             print(f"Error logging to Google Sheets: {e}")
             
@@ -124,6 +136,10 @@ async def handle_whatsapp(request: Request):
     if not message or not sender:
         return {"status": "ignored"}
     
+    # Abaikan pesan yang berasal dari grup notifikasi sendiri
+    if str(sender) in [GROUP_IT_SUPPORT, GROUP_PRIBADI]:
+        return {"status": "ignored_group_msg"}
+    
     # 1. Generate Nomor Tiket Baru
     ticket_id = generate_ticket_number()
     
@@ -144,13 +160,10 @@ async def handle_whatsapp(request: Request):
                 contents=message
             )
             if response and response.text:
-                print(f"Sukses memproses dengan model: {model_name}")
                 break
-        except Exception as e:
-            print(f"Model {model_name} error: {e}, mencoba berikutnya...")
+        except Exception:
             continue
 
-    # Parsing Respon Gemini AI
     if response and response.text:
         try:
             raw_text = response.text.strip()
@@ -162,22 +175,35 @@ async def handle_whatsapp(request: Request):
             
             ai_data = json.loads(raw_text)
             kategori = ai_data.get("kategori", "Lainnya")
-            ai_reply = ai_data.get("jawaban", "Halo! saya merupakan Anythimyth_AI, Terima kasih telah menghubungi Kami. Ada yang bisa kami bantu?")
+            ai_reply = ai_data.get("jawaban", "Halo! Terima kasih telah menghubungi IT Support. Ada yang bisa kami bantu?")
         except Exception:
             ai_reply = response.text.strip()
             kategori = "Informasi/Sapaan"
     else:
-        # Fallback Cadangan Netral jika seluruh API Google sibuk/offline
         kategori = "Informasi/Sapaan"
-        ai_reply = "Halo! saya merupakan Anythimyth_AI, Terima kasih telah menghubungi Kami. Silakan sampaikan kendala teknis Anda (seperti POS, Printer, WiFi, atau Scanner)."
+        ai_reply = "Halo! Terima kasih telah menghubungi IT Support. Silakan sampaikan kendala teknis Anda."
 
     formatted_reply = f"🎫 *[TIKET #{ticket_id}]*\n\n{ai_reply}"
 
-    # 3. KIRIM BALASAN KE WHATSAPP DAHULU (Bebas Delay)
+    # 3. Kirim Balasan Otomatis ke Pengirim Chat
     if FONNTE_TOKEN:
         send_whatsapp_reply(str(sender), formatted_reply)
 
-    # 4. CATAT LOG KE GOOGLE SHEETS DI BACKGROUND (Non-blocking)
+        # 4. Kirim Notifikasi ke Grup Terkait (Dipisah Berdasarkan Kategori)
+        if kategori in ["Informasi/Sapaan"]:
+            if GROUP_PRIBADI:
+                threading.Thread(
+                    target=send_group_notification, 
+                    args=(GROUP_PRIBADI, "💬 *[CHAT PRIBADI / SAPAAN]*", ticket_id, str(sender), str(sender_name), str(message), kategori)
+                ).start()
+        else:
+            if GROUP_IT_SUPPORT:
+                threading.Thread(
+                    target=send_group_notification, 
+                    args=(GROUP_IT_SUPPORT, "🚨 *[TIKET MASUK IT SUPPORT]*", ticket_id, str(sender), str(sender_name), str(message), kategori)
+                ).start()
+
+    # 5. Catat Log ke Google Sheets di Background Thread
     log_to_sheets_async(ticket_id, sender, sender_name, message, kategori, ai_reply)
 
     return {"ticket_id": ticket_id, "target": sender, "message": formatted_reply}
