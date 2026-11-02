@@ -148,7 +148,7 @@ def process_message_async(sender: str, sender_name: str, message: str):
 
     # 3. KELUHAN TEKNIS DIKONFIRMASI -> GENERATE TIKET & BALAS CLIENT
     ticket_id = generate_ticket_number()
-    formatted_reply = f"🎫 *[TIKET #{ticket_id}]*\n\n{ai_reply}"
+    formatted_reply = f"🎫 *[Anythimyth_AI TIKET #{ticket_id}]*\n\n{ai_reply}"
 
     if FONNTE_TOKEN:
         print(f"[REPLY] Membalas pesan tiket ke client {sender}...")
