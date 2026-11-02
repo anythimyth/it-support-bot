@@ -100,37 +100,10 @@ def log_to_sheets_async(ticket_id, sender, sender_name, message, kategori, ai_re
             
     threading.Thread(target=run).start()
 
-# ----------------------------------------------------
-# 3. ENDPOINTS FASTAPI
-# ----------------------------------------------------
-@app.api_route("/", methods=["GET", "HEAD"])
-def read_root():
-    return {"status": "IT Support Bot Webhook Service is Running"}
-
-@app.api_route("/health", methods=["GET", "HEAD"])
-def health_check():
-    return {"status": "healthy"}
-
-@app.post("/webhook")
-async def handle_whatsapp(request: Request):
-    try:
-        data = await request.json()
-    except Exception:
-        return {"status": "invalid json"}
-    
-    sender = data.get("sender") or data.get("from") or data.get("phone")
-    message = data.get("message") or data.get("text")
-    sender_name = data.get("name") or data.get("pushname") or "Client WA"
-    
-    if not message or not sender:
-        return {"status": "ignored"}
-    
-    print(f"\n--- PESAN MASUK ---")
-    print(f"Dari: {sender_name} ({sender})")
-    print(f"Pesan: {message}")
-
-    # 1. Olah Pesan dengan Gemini AI (Auto-Fallback Mechanism)
-    models_to_try = ['gemini-3.5-flash-lite', 'gemini-3.6-flash', 'gemini-3.8-flash', 'gemini-2.5-flash']
+def process_message_async(sender: str, sender_name: str, message: str):
+    """Proses AI dan Pengiriman Balasan Berjalan di Background Thread agar Fonnte Tidak Retry 3x"""
+    # 1. Olah Pesan dengan Gemini AI (Urutan Model Aktif & Hemat Kuota)
+    models_to_try = ['gemini-3.5-flash-lite', 'gemini-3.6-flash', 'gemini-3.8-flash']
     response = None
     kategori = "Pribadi/Abaikan"
     ai_reply = ""
@@ -166,14 +139,14 @@ async def handle_whatsapp(request: Request):
             ai_reply = ai_data.get("jawaban", "")
         except Exception as e:
             print(f"[PARSE ERROR] Gagal parse JSON Gemini: {e}")
-            return {"status": "ignored_unparsed"}
+            return
 
     # 2. FILTER CHAT PRIBADI: JIKA CHAT PRIBADI/SAPAAN -> ABAIKAN TANPA BALASAN
     if kategori == "Pribadi/Abaikan" or not ai_reply.strip():
         print(f"[FILTER] Pesan dari {sender} dikategori Chat Pribadi. Diabaikan oleh AI.")
-        return {"status": "ignored_personal_chat"}
+        return
 
-    # 3. KELUHAN TEKNIS DIKONFIRMASI -> GENERATE TIKET & KIRIM BALASAN KE CLIENT
+    # 3. KELUHAN TEKNIS DIKONFIRMASI -> GENERATE TIKET & BALAS CLIENT
     ticket_id = generate_ticket_number()
     formatted_reply = f"🎫 *[TIKET #{ticket_id}]*\n\n{ai_reply}"
 
@@ -181,7 +154,43 @@ async def handle_whatsapp(request: Request):
         print(f"[REPLY] Membalas pesan tiket ke client {sender}...")
         send_whatsapp_reply(str(sender), formatted_reply)
 
-    # Catat Log Tiket ke Google Sheets di Background Thread
+    # Catat Log Tiket ke Google Sheets
     log_to_sheets_async(ticket_id, sender, sender_name, message, kategori, ai_reply)
 
-    return {"ticket_id": ticket_id, "target": sender, "message": formatted_reply}
+# ----------------------------------------------------
+# 3. ENDPOINTS FASTAPI
+# ----------------------------------------------------
+@app.api_route("/", methods=["GET", "HEAD"])
+def read_root():
+    return {"status": "IT Support Bot Webhook Service is Running"}
+
+@app.api_route("/health", methods=["GET", "HEAD"])
+def health_check():
+    return {"status": "healthy"}
+
+@app.post("/webhook")
+async def handle_whatsapp(request: Request):
+    try:
+        data = await request.json()
+    except Exception:
+        return {"status": "invalid json"}
+    
+    sender = data.get("sender") or data.get("from") or data.get("phone")
+    message = data.get("message") or data.get("text")
+    sender_name = data.get("name") or data.get("pushname") or "Client WA"
+    
+    if not message or not sender:
+        return {"status": "ignored"}
+    
+    print(f"\n--- PESAN MASUK ---")
+    print(f"Dari: {sender_name} ({sender})")
+    print(f"Pesan: {message}")
+
+    # Jalankan Seluruh Proses AI & Balasan di Background Thread
+    # Hal ini membuat Fonnte menerima HTTP 200 OK instan sehingga TIDAK mengirimkan pesan ganda (retry 3 kali)
+    threading.Thread(
+        target=process_message_async, 
+        args=(str(sender), str(sender_name), str(message))
+    ).start()
+
+    return {"status": "processing"}
