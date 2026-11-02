@@ -1,7 +1,7 @@
 fastapi
 uvicorn
+requests
 google-genai
 gspread
 oauth2client
-requests
-python-dotenv
+python-multipart
