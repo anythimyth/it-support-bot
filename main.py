@@ -46,6 +46,7 @@ Aturan Respon:
 
 2. Jika pengguna mengirim KELUHAN TEKNIS / TROUBLE (contoh: "Printer macet", "Aplikasi POS error", "WiFi kasir putus"):
    - Berikan 2-3 langkah troubleshooting yang ringkas, jelas, dan mudah diikuti.
+   - Jika kendala memerlukan penanganan langsung, sampaikan bahwa Anda akan bantu jadwalkan kunjungan teknisi IT.
    - Set field "kategori" ke salah satu pilihan: "Hardware", "Network", "POS", "Software", atau "Lainnya".
 
 Format Respon Wajib (HANYA JSON VALID):
