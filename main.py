@@ -20,9 +20,6 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 FONNTE_TOKEN = os.getenv("FONNTE_TOKEN")
 GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON")
 
-# Nomor WA/HP Penerima Alert Khusus (Format: 08xxxxxxxxxx atau 628xxxxxxxxxx)
-ALERT_PHONE_NUMBER = os.getenv("ALERT_PHONE_NUMBER")
-
 # Inisialisasi Gemini Client
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
@@ -80,17 +77,6 @@ def send_whatsapp_reply(target: str, message: str):
     except Exception as e:
         print(f"[FONNTE ERROR] Gagal mengirim pesan WA ke {target}: {e}")
 
-def send_simple_wa_alert(sender: str, sender_name: str):
-    """Mengirim Notifikasi Ringkas untuk SEMUA Pesan Masuk (Pribadi & Pekerjaan)"""
-    if not ALERT_PHONE_NUMBER:
-        print("[WARNING] ALERT_PHONE_NUMBER belum di-set di Environment Variables Render!")
-        return
-    
-    # Format universal yang singkat & pasti ditangkap MacroDroid
-    alert_message = f"SMS_ALERT: Ada WA Masuk dari {sender_name} ({sender})"
-    print(f"[ALERT HP LAMA] Mengirim sinyal alert ke {ALERT_PHONE_NUMBER}")
-    send_whatsapp_reply(ALERT_PHONE_NUMBER, alert_message)
-
 def log_to_sheets_async(ticket_id, sender, sender_name, message, kategori, ai_reply):
     def run():
         try:
@@ -139,22 +125,11 @@ async def handle_whatsapp(request: Request):
     if not message or not sender:
         return {"status": "ignored"}
     
-    # Abaikan jika pesan berasal dari nomor alert sendiri agar tidak looping
-    if ALERT_PHONE_NUMBER and str(sender) == str(ALERT_PHONE_NUMBER):
-        return {"status": "ignored_self_alert"}
-    
     print(f"\n--- PESAN MASUK ---")
     print(f"Dari: {sender_name} ({sender})")
     print(f"Pesan: {message}")
 
-    # 1. KIRIM NOTIFIKASI SMS_ALERT UNTUK *SEMUA* PESAN MASUK (PRIORITAS UTAMA)
-    if ALERT_PHONE_NUMBER:
-        threading.Thread(
-            target=send_simple_wa_alert, 
-            args=(str(sender), str(sender_name))
-        ).start()
-
-    # 2. Olah Pesan dengan Gemini AI untuk Klasifikasi
+    # 1. Olah Pesan dengan Gemini AI (Auto-Fallback Mechanism)
     models_to_try = ['gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-2.5-flash', 'gemini-1.5-flash']
     response = None
     kategori = "Pribadi/Abaikan"
@@ -191,21 +166,22 @@ async def handle_whatsapp(request: Request):
             ai_reply = ai_data.get("jawaban", "")
         except Exception as e:
             print(f"[PARSE ERROR] Gagal parse JSON Gemini: {e}")
-            return {"status": "alert_sent_unparsed"}
+            return {"status": "ignored_unparsed"}
 
-    # 3. JIKA CHAT PRIBADI / SAPAAN -> STOP DI SINI (AI TIDAK MEMBALAS & TIDAK MENCATAT LOG)
+    # 2. FILTER CHAT PRIBADI: JIKA CHAT PRIBADI/SAPAAN -> ABAIKAN TANPA BALASAN
     if kategori == "Pribadi/Abaikan" or not ai_reply.strip():
-        print(f"[FILTER] Pesan pribadi dari {sender}. Alert terkirim, balasan AI diabaikan.")
-        return {"status": "alert_sent_personal_ignored"}
+        print(f"[FILTER] Pesan dari {sender} dikategori Chat Pribadi. Diabaikan oleh AI.")
+        return {"status": "ignored_personal_chat"}
 
-    # 4. JIKA KELUHAN TEKNIS -> BALAS DENGAN TIKET & CATAT LOG
+    # 3. KELUHAN TEKNIS DIKONFIRMASI -> GENERATE TIKET & KIRIM BALASAN KE CLIENT
     ticket_id = generate_ticket_number()
     formatted_reply = f"🎫 *[TIKET #{ticket_id}]*\n\n{ai_reply}"
 
     if FONNTE_TOKEN:
-        print(f"[REPLY] Membalas tiket ke client {sender}...")
+        print(f"[REPLY] Membalas pesan tiket ke client {sender}...")
         send_whatsapp_reply(str(sender), formatted_reply)
 
+    # Catat Log Tiket ke Google Sheets di Background Thread
     log_to_sheets_async(ticket_id, sender, sender_name, message, kategori, ai_reply)
 
     return {"ticket_id": ticket_id, "target": sender, "message": formatted_reply}
