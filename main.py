@@ -63,7 +63,7 @@ async def handle_whatsapp(request: Request):
     
     try:
         response = ai_client.models.generate_content(
-            model="gemini-3.6-flash",
+            model="gemini-2.5-flash",
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_PROMPT,
                 temperature=0.2,
